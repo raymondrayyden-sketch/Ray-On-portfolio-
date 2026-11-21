@@ -9,6 +9,7 @@ interface RetouchSliderProps {
   afterSrc: string | null;
   copy: PortfolioCopy;
   editMode: boolean;
+  isCloudLoading?: boolean;
   onCopyChange: (key: keyof PortfolioCopy, val: string) => void;
 }
 
@@ -17,6 +18,7 @@ export function RetouchSlider({
   afterSrc,
   copy,
   editMode,
+  isCloudLoading = false,
   onCopyChange,
 }: RetouchSliderProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -68,6 +70,10 @@ export function RetouchSlider({
                 primarySrc={afterSrc}
                 fallbackSVG={buildStudioPortraitSVG('graded')}
                 alt="After Retouching Crimson Editorial Portrait"
+                cloudinaryWidth={900}
+                loading="lazy"
+                decoding="async"
+                isSkeletonLoading={isCloudLoading}
                 className="w-full h-full object-cover object-top"
               />
             </div>
@@ -83,6 +89,10 @@ export function RetouchSlider({
                   primarySrc={beforeSrc}
                   fallbackSVG={buildStudioPortraitSVG('raw')}
                   alt="Before Retouching Raw Studio Portrait"
+                  cloudinaryWidth={900}
+                  loading="lazy"
+                  decoding="async"
+                  isSkeletonLoading={isCloudLoading}
                   className="w-full h-full object-cover object-top"
                 />
               </div>

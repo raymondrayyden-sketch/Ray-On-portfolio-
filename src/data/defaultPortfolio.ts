@@ -1,6 +1,7 @@
 import type { PortfolioConfig } from '../types/portfolio';
 
-export const HERO_PORTRAIT_ASSET = '/src/assets/images/hero_crimson_portrait_1795165791129.jpg';
+export const HERO_PORTRAIT_ASSET =
+  'https://res.cloudinary.com/urwej0rr/image/upload/v1795281635/1795150420610.jpg';
 export const RETOUCH_AFTER_ASSET = '/src/assets/images/regenerated_image_1795180354594.png';
 export const EDITORIAL_PORTRAIT_ASSET = '/src/assets/images/editorial_cutout_portrait_1795165799061.jpg';
 export const DUNNI_PHOTO_ASSET = '/src/assets/images/dunni_fashion_lookbook_1795165796586.jpg';

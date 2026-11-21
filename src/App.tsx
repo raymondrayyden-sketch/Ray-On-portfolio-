@@ -21,6 +21,7 @@ import {
 } from './utils/exportStandaloneHtml';
 import {
   loadConfigFromCloud,
+  readCachedPortfolioConfig,
   saveConfigToCloud,
   signOutAdmin,
   subscribeAdminAuth,
@@ -42,9 +43,17 @@ import { AdminLoginModal } from './components/AdminLoginModal';
 import { AffiliationsMarquee } from './components/AffiliationsMarquee';
 
 export default function App() {
-  const [config, setConfig] = useState<PortfolioConfig>(() => deepClone(DEFAULT_PORTFOLIO_CONFIG));
-  const [cloudState, setCloudState] = useState<CloudSyncState>('loading');
-  const [storageStatus, setStorageStatus] = useState<string>('Loading from Cloud...');
+  const [initialCache] = useState<PortfolioConfig | null>(() => readCachedPortfolioConfig());
+  const [config, setConfig] = useState<PortfolioConfig>(
+    () => initialCache ?? deepClone(DEFAULT_PORTFOLIO_CONFIG)
+  );
+  const [isInitialCloudLoading, setIsInitialCloudLoading] = useState<boolean>(() => !initialCache);
+  const [cloudState, setCloudState] = useState<CloudSyncState>(() =>
+    initialCache ? 'synced' : 'loading'
+  );
+  const [storageStatus, setStorageStatus] = useState<string>(() =>
+    initialCache ? 'Synced to Cloud' : 'Loading from Cloud...'
+  );
   const [editMode, setEditMode] = useState<boolean>(false);
   const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(false);
   const [drawerInitialTab, setDrawerInitialTab] = useState<StudioTab>('copy');
@@ -109,12 +118,14 @@ export default function App() {
   }, [config.copy.siteTitle]);
 
   // Load live portfolio config from Firebase Firestore (portfolio/main) on page load
+  // Repeat visits render instantly from localStorage cache, then silently refresh here
   useEffect(() => {
     let active = true;
     void loadConfigFromCloud().then((res) => {
       if (!active) return;
       latestConfigRef.current = res.config;
       setConfig(res.config);
+      setIsInitialCloudLoading(false);
       if (res.existsInCloud) {
         setCloudState('synced');
         setStorageStatus('Synced to Cloud');
@@ -270,6 +281,10 @@ export default function App() {
       try {
         const res = await saveConfigToCloud(targetConfig);
         if (res.ok) {
+          if (res.cleanedConfig && res.strippedBase64Count && res.strippedBase64Count > 0) {
+            latestConfigRef.current = res.cleanedConfig;
+            setConfig(res.cleanedConfig);
+          }
           setCloudState('synced');
           setStorageStatus(res.status || 'Synced to Cloud');
           if (res.warning) {
@@ -527,6 +542,9 @@ export default function App() {
                 primarySrc={config.images.logoPrimary}
                 fallbackSVG={buildRayOnLogoSVG(false, 'nav')}
                 alt="Ray-On Brand Agency Logo"
+                cloudinaryWidth={400}
+                decoding="async"
+                isSkeletonLoading={isInitialCloudLoading}
                 className={
                   config.images.logoPrimary && config.imageLightBg?.logoPrimary
                     ? 'w-full h-full object-contain'
@@ -777,6 +795,10 @@ export default function App() {
                       primarySrc={config.images.heroPortrait}
                       fallbackSVG={buildStudioPortraitSVG('hero')}
                       alt="Raymond Ajimuda Studio Portrait"
+                      cloudinaryWidth={900}
+                      fetchPriority="high"
+                      loading="eager"
+                      decoding="async"
                       className={
                         config.images.heroPortrait && config.imageLightBg?.heroPortrait
                           ? 'w-full h-full object-contain'
@@ -864,6 +886,8 @@ export default function App() {
                     primarySrc={config.images.heroPortrait}
                     fallbackSVG={buildStudioPortraitSVG('av1')}
                     alt={config.profile.name}
+                    cloudinaryWidth={900}
+                    decoding="async"
                     className="w-full h-full object-cover object-top"
                   />
                 </div>
@@ -930,6 +954,9 @@ export default function App() {
                     primarySrc={config.images.logoPrimary}
                     fallbackSVG={buildRayOnLogoSVG(false, 'hero')}
                     alt="Ray-On Brand Agency Logo"
+                    cloudinaryWidth={400}
+                    decoding="async"
+                    isSkeletonLoading={isInitialCloudLoading}
                     className={
                       config.images.logoPrimary && config.imageLightBg?.logoPrimary
                         ? 'w-full h-full object-contain'
@@ -978,6 +1005,10 @@ export default function App() {
                   primarySrc={config.images.logoMonochrome}
                   fallbackSVG={buildRayOnLogoSVG(true, 'aboutwm')}
                   alt="Ray-On Monochrome Logo"
+                  cloudinaryWidth={400}
+                  loading="lazy"
+                  decoding="async"
+                  isSkeletonLoading={isInitialCloudLoading}
                   className={
                     config.images.logoMonochrome && config.imageLightBg?.logoMonochrome
                       ? 'w-full h-full object-contain'
@@ -1066,6 +1097,10 @@ export default function App() {
                         secondarySrc={config.images.aboutPortraitFallback}
                         fallbackSVG={buildStudioPortraitSVG('about')}
                         alt="Raymond Ajimuda Editorial Cutout Portrait"
+                        cloudinaryWidth={900}
+                        loading="lazy"
+                        decoding="async"
+                        isSkeletonLoading={isInitialCloudLoading}
                         className={
                           config.images.aboutPortrait && config.imageLightBg?.aboutPortrait
                             ? 'w-full h-full object-contain'
@@ -1378,6 +1413,7 @@ export default function App() {
                   <ProjectTile
                     key={project.id}
                     project={project}
+                    isCloudLoading={isInitialCloudLoading}
                     isTouchMorphed={
                       activeTileMorph?.group === 'identity' && activeTileMorph.id === project.id
                     }
@@ -1458,6 +1494,7 @@ export default function App() {
                   <ProjectTile
                     key={project.id}
                     project={project}
+                    isCloudLoading={isInitialCloudLoading}
                     isTouchMorphed={
                       activeTileMorph?.group === 'flyers' && activeTileMorph.id === project.id
                     }
@@ -1560,6 +1597,7 @@ export default function App() {
                   <VideoReelCard
                     key={reel.id}
                     reel={reel}
+                    isCloudLoading={isInitialCloudLoading}
                     isTouchMorphed={
                       activeTileMorph?.group === 'videos' && activeTileMorph.id === reel.id
                     }
@@ -1635,6 +1673,7 @@ export default function App() {
               afterSrc={config.images.retouchAfter}
               copy={config.copy}
               editMode={editMode}
+              isCloudLoading={isInitialCloudLoading}
               onCopyChange={handleCopyFieldChange}
             />
 
@@ -1647,6 +1686,7 @@ export default function App() {
                 <ProjectTile
                   key={project.id}
                   project={project}
+                  isCloudLoading={isInitialCloudLoading}
                   isTouchMorphed={
                     activeTileMorph?.group === 'photos' && activeTileMorph.id === project.id
                   }
@@ -1805,6 +1845,10 @@ export default function App() {
                       primarySrc={config.images.logoPrimary}
                       fallbackSVG={buildRayOnLogoSVG(false, 'footer')}
                       alt="Ray-On Brand Agency Logo"
+                      cloudinaryWidth={400}
+                      loading="lazy"
+                      decoding="async"
+                      isSkeletonLoading={isInitialCloudLoading}
                       className={
                         config.images.logoPrimary && config.imageLightBg?.logoPrimary
                           ? 'w-full h-full object-contain'
@@ -2013,6 +2057,9 @@ export default function App() {
                         primarySrc={config.images.heroPortrait}
                         fallbackSVG={buildStudioPortraitSVG('av2')}
                         alt={config.profile.name}
+                        cloudinaryWidth={900}
+                        loading="lazy"
+                        decoding="async"
                         className="w-full h-full object-cover object-top"
                       />
                     </div>
@@ -2094,6 +2141,10 @@ export default function App() {
                       secondarySrc={config.images.aboutPortraitFallback}
                       fallbackSVG={buildStudioPortraitSVG('contact')}
                       alt="Raymond Ajimuda Contact Portrait"
+                      cloudinaryWidth={900}
+                      loading="lazy"
+                      decoding="async"
+                      isSkeletonLoading={isInitialCloudLoading}
                       className={
                         config.images.contactPortrait && config.imageLightBg?.contactPortrait
                           ? 'w-full h-full object-contain'
@@ -2130,6 +2181,10 @@ export default function App() {
                       primarySrc={qrSrc}
                       fallbackSVG={buildQRCodeFallbackSVG()}
                       alt={`QR Code for ${config.profile.instagramHandle}`}
+                      cloudinaryWidth={400}
+                      loading="lazy"
+                      decoding="async"
+                      isSkeletonLoading={isInitialCloudLoading}
                       className="w-full h-full object-contain rounded-lg"
                     />
                   </a>
@@ -2190,6 +2245,7 @@ export default function App() {
         affiliations={config.affiliations || []}
         heading={config.copy.affiliationsHeading}
         editMode={editMode}
+        isCloudLoading={isInitialCloudLoading}
         onCopyChange={handleCopyFieldChange}
       />
 

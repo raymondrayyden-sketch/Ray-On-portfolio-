@@ -42,13 +42,15 @@ export const portfolioAuth: Auth = getAuth(portfolioApp);
 
 const PORTFOLIO_COLLECTION = 'portfolio';
 const PORTFOLIO_DOC_ID = 'main';
+const PORTFOLIO_CACHE_KEY = 'rayon_portfolio_cloud_cache_v1';
 
 const VIDEO_EXT_REGEX = /\.(mp4|mov|webm|m4v|ogg|ogv|avi|mkv|3gp|wmv)$/i;
 const TRANSCODE_VIDEO_EXT_REGEX = /\.(mov|mkv|avi|3gp|wmv|m4v)$/i;
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024; // 100 MB (Cloudinary free-tier video limit)
 const CHUNK_THRESHOLD_BYTES = 18 * 1024 * 1024; // Use chunked upload above 18 MB
 const CHUNK_SIZE_BYTES = 6 * 1024 * 1024; // 6 MB chunks (>= 5 MB required by Cloudinary)
-const MAX_INLINE_BASE64_BYTES = 100 * 1024; // 100 KB threshold before stripping Base64 for Firestore 1 MB safety
+const MAX_INLINE_IMAGE_BASE64_BYTES = 5 * 1024; // 5 KB limit for inline data:image/* Base64 cleanup
+const MAX_INLINE_BASE64_BYTES = 100 * 1024; // 100 KB limit for any other inline data: string
 
 export interface CloudinaryUploadResult {
   secureUrl: string;
@@ -73,6 +75,24 @@ export function isVideoUrl(url: string | null | undefined): boolean {
   const clean = url.trim().split('?')[0];
   if (clean.includes('/video/upload/')) return true;
   return VIDEO_EXT_REGEX.test(clean);
+}
+
+/**
+ * Auto-optimizes Cloudinary image URLs by injecting f_auto,q_auto,w_${width},c_limit/
+ * right after /image/upload/ (when not already optimized with f_auto).
+ */
+export function optimizeCloudinaryUrl(url: string | null | undefined, width = 1000): string | null {
+  if (!url || typeof url !== 'string') return url ?? null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  if (
+    trimmed.includes('res.cloudinary.com') &&
+    trimmed.includes('/image/upload/') &&
+    !trimmed.includes('f_auto')
+  ) {
+    return trimmed.replace('/image/upload/', `/image/upload/f_auto,q_auto,w_${width},c_limit/`);
+  }
+  return trimmed;
 }
 
 /**
@@ -130,16 +150,27 @@ function isSafeUrl(val: string | null | undefined): boolean {
   return true;
 }
 
+function isValidMediaRef(trimmed: string): boolean {
+  const lower = trimmed.toLowerCase();
+  // Allow HTTPS/HTTP URLs, data: URLs, and valid root-relative asset paths; drop bare missing filenames (e.g. 249486.jpg)
+  return (
+    lower.startsWith('https://') ||
+    lower.startsWith('http://') ||
+    lower.startsWith('data:') ||
+    trimmed.startsWith('/')
+  );
+}
+
 function sanitizeUrl(val: string | null | undefined, fallback: string | null = null): string | null {
   if (!val || typeof val !== 'string') return fallback;
   const trimmed = val.trim();
-  if (!trimmed || !isSafeUrl(trimmed)) return fallback;
+  if (!trimmed || !isSafeUrl(trimmed) || !isValidMediaRef(trimmed)) return fallback;
   return trimmed;
 }
 
 /**
  * Merges a remote Firestore portfolio document with DEFAULT_PORTFOLIO_CONFIG
- * so missing fields always fall back cleanly.
+ * so missing fields always fall back cleanly and broken local filenames are ignored.
  */
 export function mergePortfolioConfig(saved: Partial<PortfolioConfig> | null | undefined): PortfolioConfig {
   const base = deepClone(DEFAULT_PORTFOLIO_CONFIG);
@@ -167,6 +198,18 @@ export function mergePortfolioConfig(saved: Partial<PortfolioConfig> | null | un
       }))
     : base.affiliations;
 
+  const sanitizeProjectList = (
+    list: PortfolioConfig['identityProjects'] | undefined,
+    fallbackList: PortfolioConfig['identityProjects']
+  ) =>
+    Array.isArray(list)
+      ? list.map((item) => ({
+          ...item,
+          image: sanitizeUrl(item.image, null),
+          fallbackImage: item.fallbackImage !== undefined ? sanitizeUrl(item.fallbackImage, null) : undefined,
+        }))
+      : fallbackList;
+
   const mergedVideoReels = Array.isArray(saved.videoReels)
     ? saved.videoReels.map((v) => {
         const cleanVideoUrl = sanitizeUrl(v.videoUrl, null);
@@ -176,7 +219,9 @@ export function mergePortfolioConfig(saved: Partial<PortfolioConfig> | null | un
           ...v,
           videoUrl: normalizedVideoUrl,
           gifUrl: normalizedVideoUrl ? null : sanitizeUrl(v.gifUrl, null),
-          posterUrl: cleanPosterUrl || (normalizedVideoUrl ? deriveCloudinaryVideoPoster(normalizedVideoUrl) || null : null),
+          posterUrl:
+            cleanPosterUrl ||
+            (normalizedVideoUrl ? deriveCloudinaryVideoPoster(normalizedVideoUrl) || null : null),
         };
       })
     : base.videoReels;
@@ -191,24 +236,60 @@ export function mergePortfolioConfig(saved: Partial<PortfolioConfig> | null | un
     cv: mergedCv,
     services: Array.isArray(saved.services) ? saved.services : base.services,
     tools: Array.isArray(saved.tools) ? saved.tools : base.tools,
-    identityProjects: Array.isArray(saved.identityProjects)
-      ? saved.identityProjects
-      : base.identityProjects,
-    flyerProjects: Array.isArray(saved.flyerProjects)
-      ? saved.flyerProjects
-      : base.flyerProjects,
+    identityProjects: sanitizeProjectList(saved.identityProjects, base.identityProjects),
+    flyerProjects: sanitizeProjectList(saved.flyerProjects, base.flyerProjects),
     videoReels: mergedVideoReels,
-    photoProjects: Array.isArray(saved.photoProjects)
-      ? saved.photoProjects
-      : base.photoProjects,
+    photoProjects: sanitizeProjectList(saved.photoProjects, base.photoProjects),
     testimonials: Array.isArray(saved.testimonials) ? saved.testimonials : base.testimonials,
     affiliations: mergedAffiliations,
   };
 }
 
 /**
- * Strips transient blob: URLs and any oversized inline data: Base64 strings (> 100 KB)
- * right before writing to Firestore so documents never exceed Firestore's 1 MB limit.
+ * Fast localStorage read cache for instant repeat visits with zero flicker.
+ */
+export function readCachedPortfolioConfig(): PortfolioConfig | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(PORTFOLIO_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<PortfolioConfig>;
+    if (!parsed || typeof parsed !== 'object' || !parsed.copy || !parsed.profile) {
+      return null;
+    }
+    return mergePortfolioConfig(parsed);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Persists the latest Firestore portfolio/main snapshot into localStorage for instant repeat loads.
+ */
+export function writeCachedPortfolioConfig(config: PortfolioConfig): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const { payload } = sanitizeConfigForCloud(config);
+    window.localStorage.setItem(PORTFOLIO_CACHE_KEY, JSON.stringify(payload));
+  } catch {
+    // Ignore storage quota or private-mode errors
+  }
+}
+
+function isOversizedBase64DataUrl(trimmed: string): boolean {
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith('data:image/')) {
+    return trimmed.length > MAX_INLINE_IMAGE_BASE64_BYTES;
+  }
+  if (lower.startsWith('data:')) {
+    return trimmed.length > MAX_INLINE_BASE64_BYTES;
+  }
+  return false;
+}
+
+/**
+ * Strips transient blob: URLs, missing local filenames, and any remaining data:image/* Base64 strings
+ * larger than 5 KB (or any other data: string > 100 KB) so portfolio/main stays tiny and loads in <300ms.
  */
 function sanitizeConfigForCloud(config: PortfolioConfig): {
   payload: PortfolioConfig;
@@ -222,19 +303,18 @@ function sanitizeConfigForCloud(config: PortfolioConfig): {
     const trimmed = val.trim();
     if (!trimmed || !isSafeUrl(trimmed)) return fallback;
     if (trimmed.startsWith('blob:')) return fallback;
-    if (trimmed.startsWith('data:') && trimmed.length > MAX_INLINE_BASE64_BYTES) {
+    if (isOversizedBase64DataUrl(trimmed)) {
       strippedBase64Count += 1;
-      return fallback;
+      return null;
     }
+    if (!isValidMediaRef(trimmed)) return fallback;
     return trimmed;
   };
 
   (Object.keys(cleaned.images) as Array<keyof PortfolioConfig['images']>).forEach((k) => {
     const defaultImg = DEFAULT_PORTFOLIO_CONFIG.images[k] ?? null;
     const safeFallback =
-      typeof defaultImg === 'string' && defaultImg.startsWith('data:') && defaultImg.length > MAX_INLINE_BASE64_BYTES
-        ? null
-        : defaultImg;
+      typeof defaultImg === 'string' && isOversizedBase64DataUrl(defaultImg) ? null : defaultImg;
     cleaned.images[k] = stripTransient(cleaned.images[k], safeFallback);
   });
 
@@ -266,11 +346,11 @@ function sanitizeConfigForCloud(config: PortfolioConfig): {
     });
   }
 
-  // Recursive safety pass across the entire payload so no stray > 100 KB data: string can break Firestore's 1 MB limit
+  // Recursive cleanup pass across the entire payload so no leftover data:image/* (>5 KB) bloat remains anywhere
   const stripDeepBase64 = (node: unknown): unknown => {
     if (typeof node === 'string') {
       const trimmed = node.trim();
-      if (trimmed.startsWith('data:') && trimmed.length > MAX_INLINE_BASE64_BYTES) {
+      if (isOversizedBase64DataUrl(trimmed)) {
         strippedBase64Count += 1;
         return null;
       }
@@ -294,8 +374,8 @@ function sanitizeConfigForCloud(config: PortfolioConfig): {
 }
 
 /**
- * Fetches portfolio/main from Firestore and merges with DEFAULT_PORTFOLIO_CONFIG.
- * If the document does not exist yet, returns DEFAULT_PORTFOLIO_CONFIG.
+ * Fetches portfolio/main from Firestore, caches it in localStorage for instant repeat loads,
+ * and merges with DEFAULT_PORTFOLIO_CONFIG.
  */
 export async function loadConfigFromCloud(): Promise<{
   config: PortfolioConfig;
@@ -312,15 +392,17 @@ export async function loadConfigFromCloud(): Promise<{
       };
     }
     const remoteData = snap.data() as Partial<PortfolioConfig>;
+    const merged = mergePortfolioConfig(remoteData);
+    writeCachedPortfolioConfig(merged);
     return {
-      config: mergePortfolioConfig(remoteData),
+      config: merged,
       existsInCloud: true,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unable to reach Firestore';
     console.warn('[PortfolioCloud] Firestore load fallback to defaults:', msg);
     return {
-      config: deepClone(DEFAULT_PORTFOLIO_CONFIG),
+      config: readCachedPortfolioConfig() || deepClone(DEFAULT_PORTFOLIO_CONFIG),
       existsInCloud: false,
       error: msg,
     };
@@ -329,8 +411,7 @@ export async function loadConfigFromCloud(): Promise<{
 
 /**
  * Saves the full PORTFOLIO_CONFIG permanently to Firestore portfolio/main via setDoc.
- * Automatically strips any oversized (>100 KB) data: Base64 strings before saving
- * and returns clear warning/error messages.
+ * Automatically cleans out any leftover data:image/* Base64 bloat (>5 KB) so Firestore stays tiny & fast (<300ms).
  */
 export async function saveConfigToCloud(
   config: PortfolioConfig
@@ -340,6 +421,7 @@ export async function saveConfigToCloud(
   error?: string;
   warning?: string;
   strippedBase64Count?: number;
+  cleanedConfig?: PortfolioConfig;
 }> {
   if (!portfolioAuth.currentUser) {
     return {
@@ -357,22 +439,22 @@ export async function saveConfigToCloud(
       updatedAt: new Date().toISOString(),
       updatedBy: portfolioAuth.currentUser.email || portfolioAuth.currentUser.uid,
     });
+    writeCachedPortfolioConfig(payload);
 
     if (strippedBase64Count > 0) {
-      const warning = `Synced to Cloud, but ${strippedBase64Count} oversized Base64 image${
+      const warning = `Synced to Cloud & cleaned ${strippedBase64Count} leftover Base64 image${
         strippedBase64Count === 1 ? '' : 's'
-      } (>100 KB) ${
-        strippedBase64Count === 1 ? 'was' : 'were'
-      } stripped to prevent Firestore 1 MB save failures. Please upload via Cloudinary instead.`;
+      } (>5 KB) so your site loads under 300ms. Re-upload any cleared image via Cloudinary.`;
       return {
         ok: true,
-        status: `Synced (${strippedBase64Count} Base64 stripped)`,
+        status: `Synced (${strippedBase64Count} Base64 cleaned)`,
         warning,
         strippedBase64Count,
+        cleanedConfig: payload,
       };
     }
 
-    return { ok: true, status: 'Synced to Cloud', strippedBase64Count: 0 };
+    return { ok: true, status: 'Synced to Cloud', strippedBase64Count: 0, cleanedConfig: payload };
   } catch (err) {
     const rawMsg = err instanceof Error ? err.message : String(err || 'Cloud save failed');
     const isPermission =

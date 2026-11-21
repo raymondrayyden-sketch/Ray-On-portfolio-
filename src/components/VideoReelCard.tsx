@@ -1,11 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { VideoReelItem } from '../types/portfolio';
 import { drawReelFrame } from '../utils/reelCanvas';
-import { deriveCloudinaryVideoPoster, normalizeCloudinaryVideoUrl } from '../services/portfolioCloud';
+import {
+  deriveCloudinaryVideoPoster,
+  normalizeCloudinaryVideoUrl,
+  optimizeCloudinaryUrl,
+} from '../services/portfolioCloud';
 
 interface VideoReelCardProps {
   reel: VideoReelItem;
   isTouchMorphed: boolean;
+  isCloudLoading?: boolean;
   onTouchMorph: (id: string) => void;
   onOpenLightbox: (id: string) => void;
 }
@@ -13,6 +18,7 @@ interface VideoReelCardProps {
 export function VideoReelCard({
   reel,
   isTouchMorphed,
+  isCloudLoading = false,
   onTouchMorph,
   onOpenLightbox,
 }: VideoReelCardProps) {
@@ -25,8 +31,10 @@ export function VideoReelCard({
 
   const isPlaying = isHoverPlaying || isTouchMorphed;
   const resolvedVideoUrl = reel.videoUrl ? normalizeCloudinaryVideoUrl(reel.videoUrl) : null;
-  const resolvedPosterUrl =
+  const rawPosterUrl =
     reel.posterUrl || (resolvedVideoUrl ? deriveCloudinaryVideoPoster(resolvedVideoUrl) : undefined);
+  const resolvedPosterUrl = rawPosterUrl ? optimizeCloudinaryUrl(rawPosterUrl, 700) || rawPosterUrl : undefined;
+  const resolvedGifUrl = reel.gifUrl ? optimizeCloudinaryUrl(reel.gifUrl, 700) || reel.gifUrl : null;
 
   useEffect(() => {
     const videoEl = videoRef.current;
@@ -112,7 +120,7 @@ export function VideoReelCard({
     }
   };
 
-  const useLightBg = Boolean(reel.lightBg && !resolvedVideoUrl && (reel.gifUrl || reel.posterUrl));
+  const useLightBg = Boolean(!isCloudLoading && reel.lightBg && !resolvedVideoUrl && (resolvedGifUrl || resolvedPosterUrl));
 
   return (
     <article
@@ -132,7 +140,9 @@ export function VideoReelCard({
       } ${isPlaying ? 'is-playing' : ''} ${isTouchMorphed ? 'is-morphed' : ''}`}
     >
       <div className={`tile-art relative w-full h-full ${useLightBg ? 'p-4 flex items-center justify-center' : ''}`}>
-        {resolvedVideoUrl ? (
+        {isCloudLoading ? (
+          <div className="w-full h-full bg-zinc-900 animate-pulse" aria-hidden="true" />
+        ) : resolvedVideoUrl ? (
           <video
             key={resolvedVideoUrl}
             ref={videoRef}
@@ -144,17 +154,19 @@ export function VideoReelCard({
             preload="metadata"
             className="w-full h-full object-cover"
           />
-        ) : reel.gifUrl ? (
+        ) : resolvedGifUrl ? (
           <>
-            {!reel.posterUrl && !useLightBg && <canvas ref={canvasRef} className="w-full h-full block" />}
+            {!resolvedPosterUrl && !useLightBg && <canvas ref={canvasRef} className="w-full h-full block" />}
             <img
-              src={isPlaying ? reel.gifUrl : reel.posterUrl || reel.gifUrl}
+              src={isPlaying ? resolvedGifUrl : resolvedPosterUrl || resolvedGifUrl}
               alt={reel.title}
+              loading="lazy"
+              decoding="async"
               referrerPolicy="no-referrer"
               className={
                 useLightBg
                   ? 'w-full h-full object-contain'
-                  : reel.posterUrl
+                  : resolvedPosterUrl
                     ? 'w-full h-full object-cover'
                     : `absolute inset-0 w-full h-full object-cover transition-opacity duration-200 ${
                         isPlaying ? 'opacity-100' : 'opacity-0'

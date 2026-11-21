@@ -1,11 +1,13 @@
 import React from 'react';
 import type { AffiliationItem, PortfolioCopy } from '../types/portfolio';
+import { optimizeCloudinaryUrl } from '../services/portfolioCloud';
 import { EditableText } from './EditableText';
 
 interface AffiliationsMarqueeProps {
   affiliations: AffiliationItem[];
   heading: string;
   editMode: boolean;
+  isCloudLoading?: boolean;
   onCopyChange: (key: keyof PortfolioCopy, val: string) => void;
 }
 
@@ -24,6 +26,7 @@ export function AffiliationsMarquee({
   affiliations,
   heading,
   editMode,
+  isCloudLoading = false,
   onCopyChange,
 }: AffiliationsMarqueeProps) {
   if (!affiliations || affiliations.length === 0) {
@@ -40,22 +43,35 @@ export function AffiliationsMarquee({
   const durationSeconds = Math.max(22, singleTrack.length * 3.8);
 
   const renderLogoTile = (item: AffiliationItem, keyPrefix: string, idx: number) => {
+    if (isCloudLoading) {
+      return (
+        <div
+          key={`${keyPrefix}-${item.id}-${idx}`}
+          className="h-16 sm:h-[74px] w-28 sm:w-36 rounded-2xl bg-zinc-900 animate-pulse border border-white/10 shrink-0"
+          aria-hidden="true"
+        />
+      );
+    }
+
+    const optimizedLogo = item.logoUrl ? optimizeCloudinaryUrl(item.logoUrl, 400) || item.logoUrl : null;
+
     const innerTile = (
       <div
         title={item.name}
         className={`group/org h-16 sm:h-[74px] w-28 sm:w-36 rounded-2xl px-4 py-2.5 flex items-center justify-center border transition-all duration-300 shadow-[0_8px_24px_rgba(0,0,0,0.42)] shrink-0 ${
-          item.logoUrl && item.lightLogoBg
+          optimizedLogo && item.lightLogoBg
             ? 'bg-white border-white/85 hover:border-crimson'
-            : item.logoUrl
+            : optimizedLogo
               ? 'bg-white/[0.04] hover:bg-white/[0.09] border-white/10 hover:border-crimson/65'
               : 'bg-gradient-to-br from-white/[0.05] via-crimson/10 to-obsidian border-white/12 hover:border-crimson/65'
         }`}
       >
-        {item.logoUrl ? (
+        {optimizedLogo ? (
           <img
-            src={item.logoUrl}
+            src={optimizedLogo}
             alt={item.name}
             loading="lazy"
+            decoding="async"
             referrerPolicy="no-referrer"
             className="max-w-full max-h-full object-contain transition-transform duration-300 group-hover/org:scale-105"
           />

@@ -6,6 +6,7 @@ import { ResilientImage } from './ResilientImage';
 interface ProjectTileProps {
   project: ProjectItem;
   isTouchMorphed: boolean;
+  isCloudLoading?: boolean;
   onTouchMorph: (id: string) => void;
   onOpenLightbox: (id: string) => void;
 }
@@ -13,6 +14,7 @@ interface ProjectTileProps {
 export function ProjectTile({
   project,
   isTouchMorphed,
+  isCloudLoading = false,
   onTouchMorph,
   onOpenLightbox,
 }: ProjectTileProps) {
@@ -39,7 +41,7 @@ export function ProjectTile({
     }
   };
 
-  const useLightBg = Boolean(project.image && project.lightBg);
+  const useLightBg = Boolean(!isCloudLoading && project.image && project.lightBg);
 
   return (
     <article
@@ -58,6 +60,10 @@ export function ProjectTile({
           secondarySrc={project.fallbackImage}
           fallbackSVG={buildProjectArtworkSVG(project.artKey, project.client)}
           alt={`${project.client} — ${project.title}`}
+          cloudinaryWidth={700}
+          loading="lazy"
+          decoding="async"
+          isSkeletonLoading={isCloudLoading}
           className={useLightBg ? 'w-full h-full object-contain' : 'w-full h-full object-cover object-top'}
         />
       </div>
