@@ -41,6 +41,7 @@ import {
 } from './components/StudioEditorDrawer';
 import { AdminLoginModal } from './components/AdminLoginModal';
 import { AffiliationsMarquee } from './components/AffiliationsMarquee';
+import { EmailModal } from './components/EmailModal';
 
 export default function App() {
   const [initialCache] = useState<PortfolioConfig | null>(() => readCachedPortfolioConfig());
@@ -90,6 +91,13 @@ export default function App() {
 
   // Lightbox
   const [lightboxSelection, setLightboxSelection] = useState<LightboxSelection | null>(null);
+
+  // Email Composer Modal (ensures all email links & inquiry email work in iframes and every browser)
+  const [emailModal, setEmailModal] = useState<{ open: boolean; subject: string; body: string }>({
+    open: false,
+    subject: '',
+    body: '',
+  });
 
   // Booking Inquiry Form
   const [inqName, setInqName] = useState('');
@@ -462,17 +470,37 @@ export default function App() {
     showToast('Opening WhatsApp with your pre-filled brief!');
   };
 
+  const openEmailComposer = useCallback(
+    (subject = '', body = '') => {
+      setEmailModal({
+        open: true,
+        subject: subject || `Project Inquiry — ${config.profile.agency}`,
+        body,
+      });
+    },
+    [config.profile.agency]
+  );
+
+  const handleEmailLinkClick = useCallback(
+    (e: React.MouseEvent<HTMLAnchorElement>) => {
+      if (editMode && (e.target as HTMLElement).closest('[data-editable]')) {
+        e.preventDefault();
+        return;
+      }
+      e.preventDefault();
+      openEmailComposer();
+    },
+    [editMode, openEmailComposer]
+  );
+
   const handleInquiryEmail = () => {
     if (!inqName.trim() || !inqMessage.trim()) {
       showToast('Please enter your name and a brief project note.');
       return;
     }
-    const subject = encodeURIComponent(
-      `Project Inquiry: ${inqService} — ${inqBrand.trim() || inqName.trim()}`
-    );
-    const body = encodeURIComponent(buildBriefText());
-    openExternalUrl(`mailto:${config.profile.email}?subject=${subject}&body=${body}`);
-    showToast('Opening your email app with the brief!');
+    const subject = `Project Inquiry: ${inqService} — ${inqBrand.trim() || inqName.trim()}`;
+    const body = buildBriefText();
+    openEmailComposer(subject, body);
   };
 
   const handleCopyPhone = async () => {
@@ -930,7 +958,8 @@ export default function App() {
                     </a>
                     <a
                       href={`mailto:${config.profile.email}`}
-                      className="inline-flex items-center gap-1 text-[11px] hover:text-crimson transition-colors"
+                      onClick={handleEmailLinkClick}
+                      className="inline-flex items-center gap-1 text-[11px] hover:text-crimson transition-colors cursor-pointer"
                     >
                       <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                         <rect x="2" y="4" width="20" height="16" rx="2" />
@@ -1236,7 +1265,8 @@ export default function App() {
 
                         <a
                           href={`mailto:${config.profile.email}`}
-                          className="inline-flex items-center gap-2 text-xs sm:text-sm font-semibold text-white hover:underline break-all"
+                          onClick={handleEmailLinkClick}
+                          className="inline-flex items-center gap-2 text-xs sm:text-sm font-semibold text-white hover:underline break-all cursor-pointer"
                         >
                           <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                             <rect x="2" y="4" width="20" height="16" rx="2" />
@@ -1889,7 +1919,8 @@ export default function App() {
 
                   <a
                     href={`mailto:${config.profile.email}`}
-                    className="inline-flex items-center gap-2 px-5 py-3 rounded-full text-xs sm:text-sm font-semibold bg-white/10 hover:bg-white/20 border border-white/20 text-white transition-all"
+                    onClick={handleEmailLinkClick}
+                    className="inline-flex items-center gap-2 px-5 py-3 rounded-full text-xs sm:text-sm font-semibold bg-white/10 hover:bg-white/20 border border-white/20 text-white transition-all cursor-pointer"
                   >
                     <EditableText
                       copyKey="closingEmailCta"
@@ -2090,7 +2121,8 @@ export default function App() {
                     <span className="text-white/30">•</span>
                     <a
                       href={`mailto:${config.profile.email}`}
-                      className="hover:text-crimson transition-colors font-medium"
+                      onClick={handleEmailLinkClick}
+                      className="hover:text-crimson transition-colors font-medium cursor-pointer"
                     >
                       {config.profile.email}
                     </a>
@@ -2211,8 +2243,9 @@ export default function App() {
                     </a>
                     <a
                       href={`mailto:${config.profile.email}`}
+                      onClick={handleEmailLinkClick}
                       aria-label="Email"
-                      className="w-8 h-8 rounded-full bg-obsidian/10 hover:bg-obsidian hover:text-white text-obsidian flex items-center justify-center transition-colors"
+                      className="w-8 h-8 rounded-full bg-obsidian/10 hover:bg-obsidian hover:text-white text-obsidian flex items-center justify-center transition-colors cursor-pointer"
                     >
                       <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                         <rect x="2" y="4" width="20" height="16" rx="2" />
@@ -2255,6 +2288,17 @@ export default function App() {
         config={config}
         onClose={() => setLightboxSelection(null)}
         onNavigate={(next) => setLightboxSelection(next)}
+      />
+
+      {/* Interactive Email Composer Modal (Gmail, Outlook, Default Mail App, Copy) */}
+      <EmailModal
+        isOpen={emailModal.open}
+        recipientEmail={config.profile.email}
+        recipientName={config.profile.name}
+        initialSubject={emailModal.subject}
+        initialBody={emailModal.body}
+        onClose={() => setEmailModal((prev) => ({ ...prev, open: false }))}
+        showToast={showToast}
       />
 
       {/* Firebase Admin Email/Password Login Modal */}

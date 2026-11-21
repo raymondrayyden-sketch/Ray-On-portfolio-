@@ -56,8 +56,12 @@ export async function copySafely(text: string): Promise<boolean> {
 export function openExternalUrl(url: string): void {
   const a = document.createElement('a');
   a.href = url;
-  a.target = '_blank';
-  a.rel = 'noopener noreferrer';
+  if (url.trim().toLowerCase().startsWith('mailto:')) {
+    a.target = '_top';
+  } else {
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+  }
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
