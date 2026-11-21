@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
+import { SpeedInsights } from '@vercel/speed-insights/react';
 import { DEFAULT_PORTFOLIO_CONFIG } from './data/defaultPortfolio';
 import type {
   LightboxSelection,
@@ -2254,6 +2255,9 @@ export default function App() {
       >
         {toastText}
       </div>
+
+      {/* Vercel Speed Insights */}
+      <SpeedInsights />
     </div>
   );
 }
