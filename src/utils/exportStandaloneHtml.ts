@@ -48,6 +48,14 @@ export async function prepareConfigForStandaloneExport(config: PortfolioConfig):
       if (item.fallbackImage) {
         item.fallbackImage = await resolveCached(item.fallbackImage);
       }
+      if (Array.isArray(item.gallery)) {
+        const resolvedGallery: string[] = [];
+        for (const u of item.gallery) {
+          const r = await resolveCached(u);
+          if (r) resolvedGallery.push(r);
+        }
+        item.gallery = resolvedGallery;
+      }
     }
   }
 
@@ -56,6 +64,15 @@ export async function prepareConfigForStandaloneExport(config: PortfolioConfig):
     reel.gifUrl = await resolveCached(reel.gifUrl);
     if (reel.videoUrl && reel.videoUrl.startsWith('blob:')) {
       reel.videoUrl = null;
+    }
+    if (Array.isArray(reel.gallery)) {
+      const resolvedGallery: string[] = [];
+      for (const u of reel.gallery) {
+        if (u.startsWith('blob:')) continue;
+        const r = await resolveCached(u);
+        if (r) resolvedGallery.push(r);
+      }
+      reel.gallery = resolvedGallery;
     }
   }
 

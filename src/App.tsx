@@ -393,11 +393,32 @@ export default function App() {
     showToast('Defaults restored & syncing to Cloud!');
   }, [commitConfigToCloud, showToast]);
 
-  // Dynamic category filters
+  // Visible (non-hidden) tile collections for public display
+  const visibleIdentityProjects = useMemo(
+    () => config.identityProjects.filter((p) => !p.hidden),
+    [config.identityProjects]
+  );
+
+  const visibleFlyerProjects = useMemo(
+    () => config.flyerProjects.filter((p) => !p.hidden),
+    [config.flyerProjects]
+  );
+
+  const visibleVideoReels = useMemo(
+    () => config.videoReels.filter((v) => !v.hidden),
+    [config.videoReels]
+  );
+
+  const visiblePhotoProjects = useMemo(
+    () => config.photoProjects.filter((p) => !p.hidden),
+    [config.photoProjects]
+  );
+
+  // Dynamic category filters (derived only from visible tiles)
   const identityCategories = useMemo(() => {
-    const unique = Array.from(new Set(config.identityProjects.map((p) => p.category).filter(Boolean)));
+    const unique = Array.from(new Set(visibleIdentityProjects.map((p) => p.category).filter(Boolean)));
     return ['All', ...unique];
-  }, [config.identityProjects]);
+  }, [visibleIdentityProjects]);
 
   const effectiveIdentityCat = identityCategories.includes(activeIdentityCategory)
     ? activeIdentityCategory
@@ -406,15 +427,15 @@ export default function App() {
   const filteredIdentityProjects = useMemo(
     () =>
       effectiveIdentityCat === 'All'
-        ? config.identityProjects
-        : config.identityProjects.filter((p) => p.category === effectiveIdentityCat),
-    [config.identityProjects, effectiveIdentityCat]
+        ? visibleIdentityProjects
+        : visibleIdentityProjects.filter((p) => p.category === effectiveIdentityCat),
+    [visibleIdentityProjects, effectiveIdentityCat]
   );
 
   const videoCategories = useMemo(() => {
-    const unique = Array.from(new Set(config.videoReels.map((v) => v.category).filter(Boolean)));
+    const unique = Array.from(new Set(visibleVideoReels.map((v) => v.category).filter(Boolean)));
     return ['All', ...unique];
-  }, [config.videoReels]);
+  }, [visibleVideoReels]);
 
   const effectiveVideoCat = videoCategories.includes(activeVideoCategory)
     ? activeVideoCategory
@@ -423,9 +444,9 @@ export default function App() {
   const filteredVideoReels = useMemo(
     () =>
       effectiveVideoCat === 'All'
-        ? config.videoReels
-        : config.videoReels.filter((v) => v.category === effectiveVideoCat),
-    [config.videoReels, effectiveVideoCat]
+        ? visibleVideoReels
+        : visibleVideoReels.filter((v) => v.category === effectiveVideoCat),
+    [visibleVideoReels, effectiveVideoCat]
   );
 
   // Derived links
@@ -1520,7 +1541,7 @@ export default function App() {
                   activeTileMorph?.group === 'flyers' ? 'has-touch-active' : ''
                 }`}
               >
-                {config.flyerProjects.map((project) => (
+                {visibleFlyerProjects.map((project) => (
                   <ProjectTile
                     key={project.id}
                     project={project}
@@ -1712,7 +1733,7 @@ export default function App() {
                 activeTileMorph?.group === 'photos' ? 'has-touch-active' : ''
               }`}
             >
-              {config.photoProjects.map((project) => (
+              {visiblePhotoProjects.map((project) => (
                 <ProjectTile
                   key={project.id}
                   project={project}

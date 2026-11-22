@@ -18,6 +18,7 @@ import {
   isVideoFile,
   isVideoUrl,
   normalizeCloudinaryVideoUrl,
+  optimizeCloudinaryUrl,
   uploadToCloudinary,
 } from '../services/portfolioCloud';
 
@@ -153,6 +154,7 @@ export function StudioEditorDrawer({
   const [isUploadingMedia, setIsUploadingMedia] = useState(false);
   const [isUploadingCv, setIsUploadingCv] = useState(false);
   const [uploadingProjectKey, setUploadingProjectKey] = useState<string | null>(null);
+  const [galleryUrlDrafts, setGalleryUrlDrafts] = useState<Record<string, string>>({});
   const [uploadProgress, setUploadProgress] = useState<number>(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [confirmResetStep, setConfirmResetStep] = useState(false);
@@ -468,6 +470,270 @@ export function StudioEditorDrawer({
     }
   };
 
+  const handleGalleryMediaUpload = async (
+    col: 'identityProjects' | 'flyerProjects' | 'photoProjects' | 'videoReels',
+    index: number,
+    files: FileList
+  ) => {
+    const fileList = Array.from(files);
+    if (fileList.length === 0) return;
+    const key = `gallery-${col}-${index}`;
+    setUploadError(null);
+    setUploadProgress(0);
+    setUploadingProjectKey(key);
+    showToast(
+      `Uploading ${fileList.length} carousel slide${fileList.length === 1 ? '' : 's'} to Cloudinary...`
+    );
+
+    const uploadedUrls: string[] = [];
+    try {
+      for (let i = 0; i < fileList.length; i++) {
+        const f = fileList[i];
+        const res = await uploadToCloudinary(f, f.name, {
+          onProgress: (pct) => {
+            const overall = Math.round(((i + pct / 100) / fileList.length) * 100);
+            setUploadProgress(overall);
+          },
+        });
+        uploadedUrls.push(res.secureUrl);
+      }
+
+      if (uploadedUrls.length > 0) {
+        onUpdateConfig(
+          (prev) => {
+            const next = deepClone(prev);
+            const target = next[col][index];
+            if (target) {
+              const current = Array.isArray(target.gallery) ? target.gallery : [];
+              const merged = [...current];
+              uploadedUrls.forEach((u) => {
+                if (!merged.includes(u)) merged.push(u);
+              });
+              target.gallery = merged;
+            }
+            return next;
+          },
+          { immediate: true }
+        );
+        showToast(
+          `Added ${uploadedUrls.length} slide${uploadedUrls.length === 1 ? '' : 's'} to tile carousel!`
+        );
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err || 'Carousel upload failed.');
+      setUploadError(msg);
+      showToast(`Carousel upload error: ${msg}`);
+    } finally {
+      setUploadingProjectKey(null);
+      setUploadProgress(0);
+    }
+  };
+
+  const handleAddGalleryUrl = (
+    col: 'identityProjects' | 'flyerProjects' | 'photoProjects' | 'videoReels',
+    index: number,
+    draftKey: string
+  ) => {
+    const raw = (galleryUrlDrafts[draftKey] || '').trim();
+    if (!raw) {
+      showToast('Paste an HTTPS media URL first.');
+      return;
+    }
+    if (!/^https?:\/\//i.test(raw)) {
+      showToast('Slide URL must start with https:// or http://');
+      return;
+    }
+    const finalUrl = isVideoUrl(raw) ? normalizeCloudinaryVideoUrl(raw) : raw;
+    onUpdateConfig(
+      (prev) => {
+        const next = deepClone(prev);
+        const target = next[col][index];
+        if (target) {
+          const current = Array.isArray(target.gallery) ? target.gallery : [];
+          if (!current.includes(finalUrl)) {
+            target.gallery = [...current, finalUrl];
+          }
+        }
+        return next;
+      },
+      { immediate: true }
+    );
+    setGalleryUrlDrafts((prev) => ({ ...prev, [draftKey]: '' }));
+    showToast('Added slide URL to tile carousel!');
+  };
+
+  const renderCarouselManager = (
+    col: 'identityProjects' | 'flyerProjects' | 'photoProjects' | 'videoReels',
+    itemId: string,
+    index: number,
+    gallery: string[] | undefined
+  ) => {
+    const slides = Array.isArray(gallery) ? gallery : [];
+    const uploadKey = `gallery-${col}-${index}`;
+    const draftKey = `${col}:${itemId}`;
+    const isUploadingThis = uploadingProjectKey === uploadKey;
+
+    const moveSlide = (slideIdx: number, dir: -1 | 1) => {
+      const targetIdx = slideIdx + dir;
+      if (targetIdx < 0 || targetIdx >= slides.length) return;
+      onUpdateConfig(
+        (prev) => {
+          const next = deepClone(prev);
+          const arr = Array.isArray(next[col][index]?.gallery) ? [...(next[col][index].gallery || [])] : [];
+          const [moved] = arr.splice(slideIdx, 1);
+          arr.splice(targetIdx, 0, moved);
+          next[col][index].gallery = arr;
+          return next;
+        },
+        { immediate: true }
+      );
+    };
+
+    const removeSlide = (slideIdx: number) => {
+      onUpdateConfig(
+        (prev) => {
+          const next = deepClone(prev);
+          const arr = Array.isArray(next[col][index]?.gallery) ? [...(next[col][index].gallery || [])] : [];
+          arr.splice(slideIdx, 1);
+          next[col][index].gallery = arr;
+          return next;
+        },
+        { immediate: true }
+      );
+      showToast('Removed carousel slide');
+    };
+
+    return (
+      <div className="pt-2.5 mt-1 border-t border-white/10 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <span className="text-[11px] font-bold text-white block">
+              Carousel Slides ({slides.length + 1} total)
+            </span>
+            <span className="text-[10px] text-zinc-400">
+              Add extra similar images or clips to enable auto-swipe &amp; manual swipe on this tile.
+            </span>
+          </div>
+          <label className="px-2.5 py-1.5 rounded-lg bg-crimson/20 hover:bg-crimson border border-crimson/45 text-[10px] font-bold text-white cursor-pointer transition-colors shrink-0">
+            <span>{isUploadingThis ? `${uploadProgress}%...` : '+ Add Media'}</span>
+            <input
+              type="file"
+              multiple
+              accept="image/*,image/gif,video/*,.mp4,.mov,.webm,.m4v"
+              disabled={isUploadingThis}
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) {
+                  void handleGalleryMediaUpload(col, index, e.target.files);
+                }
+                e.target.value = '';
+              }}
+            />
+          </label>
+        </div>
+
+        {isUploadingThis && (
+          <div className="w-full h-1.5 rounded-full bg-white/10 overflow-hidden">
+            <div
+              className="h-full bg-crimson transition-all duration-200"
+              style={{ width: `${Math.max(8, uploadProgress)}%` }}
+            />
+          </div>
+        )}
+
+        {slides.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {slides.map((url, sIdx) => {
+              const vid = isVideoUrl(url);
+              const thumb = vid
+                ? deriveCloudinaryVideoPoster(url) || ''
+                : optimizeCloudinaryUrl(url, 180) || url;
+              return (
+                <div
+                  key={`${itemId}-g-${sIdx}`}
+                  className="group relative w-16 rounded-xl bg-obsidian border border-white/15 p-1 space-y-1"
+                >
+                  <div className="relative w-full aspect-square rounded-lg overflow-hidden bg-zinc-900">
+                    {thumb ? (
+                      <img
+                        src={thumb}
+                        alt={`Slide ${sIdx + 2}`}
+                        className="w-full h-full object-cover"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-[10px] text-zinc-400">
+                        #{sIdx + 2}
+                      </div>
+                    )}
+                    {vid && (
+                      <span className="absolute bottom-0.5 right-0.5 px-1 rounded bg-black/75 text-[8px] font-bold text-white">
+                        VID
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center justify-between gap-0.5">
+                    <button
+                      type="button"
+                      disabled={sIdx === 0}
+                      onClick={() => moveSlide(sIdx, -1)}
+                      aria-label="Move slide left"
+                      className="flex-1 py-0.5 rounded bg-white/10 hover:bg-white/20 disabled:opacity-30 text-[9px] font-bold text-white"
+                    >
+                      ←
+                    </button>
+                    <button
+                      type="button"
+                      disabled={sIdx === slides.length - 1}
+                      onClick={() => moveSlide(sIdx, 1)}
+                      aria-label="Move slide right"
+                      className="flex-1 py-0.5 rounded bg-white/10 hover:bg-white/20 disabled:opacity-30 text-[9px] font-bold text-white"
+                    >
+                      →
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeSlide(sIdx)}
+                      aria-label="Remove slide"
+                      className="px-1 py-0.5 rounded bg-red-950/80 hover:bg-crimson text-[9px] font-bold text-white"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="flex items-center gap-1.5">
+          <input
+            type="url"
+            value={galleryUrlDrafts[draftKey] || ''}
+            onChange={(e) =>
+              setGalleryUrlDrafts((prev) => ({ ...prev, [draftKey]: e.target.value }))
+            }
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                handleAddGalleryUrl(col, index, draftKey);
+              }
+            }}
+            placeholder="Or paste extra slide URL (Cloudinary image/video)..."
+            className="flex-1 min-w-0 rounded-lg bg-obsidian border border-white/10 px-2.5 py-1.5 text-[11px] text-zinc-300 focus:outline-none focus:border-crimson"
+          />
+          <button
+            type="button"
+            onClick={() => handleAddGalleryUrl(col, index, draftKey)}
+            className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-crimson text-[10px] font-bold text-white transition-colors shrink-0"
+          >
+            + URL
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   const handleAffiliationLogoUpload = async (index: number, file: File) => {
     const key = `affiliation-${index}`;
     setUploadError(null);
@@ -642,27 +908,71 @@ export function StudioEditorDrawer({
     col: 'identityProjects' | 'flyerProjects' | 'photoProjects',
     item: ProjectItem,
     index: number
-  ) => (
-    <div key={item.id} className="rounded-2xl bg-white/[0.04] border border-white/10 p-3.5 space-y-2.5">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-bold text-white truncate">
-          {item.client} — <span className="text-zinc-400 font-normal">{item.title}</span>
-        </span>
-        <button
-          type="button"
-          onClick={() => {
-            onUpdateConfig((prev) => {
-              const next = deepClone(prev);
-              next[col].splice(index, 1);
-              return next;
-            });
-            showToast('Item removed');
-          }}
-          className="px-2.5 py-1 rounded-full bg-red-950/70 hover:bg-crimson text-[10px] font-bold text-white shrink-0"
-        >
-          Delete
-        </button>
-      </div>
+  ) => {
+    const isHidden = Boolean(item.hidden);
+    return (
+      <div
+        key={item.id}
+        className={`rounded-2xl p-3.5 space-y-2.5 border transition-all ${
+          isHidden
+            ? 'bg-white/[0.02] border-dashed border-white/15 opacity-70'
+            : 'bg-white/[0.04] border-white/10'
+        }`}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0 flex items-center gap-2">
+            <span className="text-xs font-bold text-white truncate">
+              {item.client} — <span className="text-zinc-400 font-normal">{item.title}</span>
+            </span>
+            {isHidden && (
+              <span className="px-2 py-0.5 rounded-full bg-zinc-800 border border-white/15 text-[9px] font-bold uppercase tracking-wider text-zinc-300 shrink-0">
+                Hidden
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                const nextHidden = !isHidden;
+                onUpdateConfig(
+                  (prev) => {
+                    const next = deepClone(prev);
+                    if (next[col][index]) next[col][index].hidden = nextHidden;
+                    return next;
+                  },
+                  { immediate: true }
+                );
+                showToast(nextHidden ? 'Tile hidden from live site' : 'Tile visible on live site');
+              }}
+              title={isHidden ? 'Show tile on site' : 'Hide tile from site'}
+              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold border transition-colors ${
+                isHidden
+                  ? 'bg-zinc-900 hover:bg-emerald-600/30 text-zinc-300 border-white/20'
+                  : 'bg-emerald-500/15 hover:bg-zinc-800 text-emerald-300 border-emerald-400/40'
+              }`}
+            >
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${isHidden ? 'bg-zinc-500' : 'bg-emerald-400'}`}
+              />
+              <span>{isHidden ? 'Off' : 'On'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                onUpdateConfig((prev) => {
+                  const next = deepClone(prev);
+                  next[col].splice(index, 1);
+                  return next;
+                });
+                showToast('Item removed');
+              }}
+              className="px-2.5 py-1 rounded-full bg-red-950/70 hover:bg-crimson text-[10px] font-bold text-white shrink-0"
+            >
+              Delete
+            </button>
+          </div>
+        </div>
       <div className="grid grid-cols-2 gap-2">
         <input
           type="text"
@@ -792,30 +1102,76 @@ export function StudioEditorDrawer({
         />
         <span>Use white backdrop behind image (best for dark transparent logos)</span>
       </label>
+      {renderCarouselManager(col, item.id, index, item.gallery)}
     </div>
-  );
+    );
+  };
 
-  const renderVideoCardEditor = (item: VideoReelItem, index: number) => (
-    <div key={item.id} className="rounded-2xl bg-white/[0.04] border border-white/10 p-3.5 space-y-2.5">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-bold text-white truncate">
-          {item.client} — <span className="text-zinc-400 font-normal">{item.title}</span>
-        </span>
-        <button
-          type="button"
-          onClick={() => {
-            onUpdateConfig((prev) => {
-              const next = deepClone(prev);
-              next.videoReels.splice(index, 1);
-              return next;
-            });
-            showToast('Reel removed');
-          }}
-          className="px-2.5 py-1 rounded-full bg-red-950/70 hover:bg-crimson text-[10px] font-bold text-white shrink-0"
-        >
-          Delete
-        </button>
-      </div>
+  const renderVideoCardEditor = (item: VideoReelItem, index: number) => {
+    const isHidden = Boolean(item.hidden);
+    return (
+      <div
+        key={item.id}
+        className={`rounded-2xl p-3.5 space-y-2.5 border transition-all ${
+          isHidden
+            ? 'bg-white/[0.02] border-dashed border-white/15 opacity-70'
+            : 'bg-white/[0.04] border-white/10'
+        }`}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0 flex items-center gap-2">
+            <span className="text-xs font-bold text-white truncate">
+              {item.client} — <span className="text-zinc-400 font-normal">{item.title}</span>
+            </span>
+            {isHidden && (
+              <span className="px-2 py-0.5 rounded-full bg-zinc-800 border border-white/15 text-[9px] font-bold uppercase tracking-wider text-zinc-300 shrink-0">
+                Hidden
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                const nextHidden = !isHidden;
+                onUpdateConfig(
+                  (prev) => {
+                    const next = deepClone(prev);
+                    if (next.videoReels[index]) next.videoReels[index].hidden = nextHidden;
+                    return next;
+                  },
+                  { immediate: true }
+                );
+                showToast(nextHidden ? 'Reel hidden from live site' : 'Reel visible on live site');
+              }}
+              title={isHidden ? 'Show reel on site' : 'Hide reel from site'}
+              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold border transition-colors ${
+                isHidden
+                  ? 'bg-zinc-900 hover:bg-emerald-600/30 text-zinc-300 border-white/20'
+                  : 'bg-emerald-500/15 hover:bg-zinc-800 text-emerald-300 border-emerald-400/40'
+              }`}
+            >
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${isHidden ? 'bg-zinc-500' : 'bg-emerald-400'}`}
+              />
+              <span>{isHidden ? 'Off' : 'On'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                onUpdateConfig((prev) => {
+                  const next = deepClone(prev);
+                  next.videoReels.splice(index, 1);
+                  return next;
+                });
+                showToast('Reel removed');
+              }}
+              className="px-2.5 py-1 rounded-full bg-red-950/70 hover:bg-crimson text-[10px] font-bold text-white shrink-0"
+            >
+              Delete
+            </button>
+          </div>
+        </div>
       <div className="grid grid-cols-2 gap-2">
         <input
           type="text"
@@ -990,9 +1346,11 @@ export function StudioEditorDrawer({
           />
           <span>Use white backdrop behind GIF/poster (best for dark transparent logos)</span>
         </label>
+        {renderCarouselManager('videoReels', item.id, index, item.gallery)}
       </div>
     </div>
-  );
+    );
+  };
 
   const renderTestimonialEditor = (item: TestimonialItem, index: number) => (
     <div key={index} className="rounded-2xl bg-white/[0.04] border border-white/10 p-3.5 space-y-2.5">
@@ -1520,6 +1878,25 @@ export function StudioEditorDrawer({
                   + Add New
                 </button>
               </div>
+
+              {(activeCollection === 'identityProjects' ||
+                activeCollection === 'flyerProjects' ||
+                activeCollection === 'videoReels' ||
+                activeCollection === 'photoProjects') && (() => {
+                const colItems = config[activeCollection] as Array<{ hidden?: boolean }>;
+                const visibleCount = colItems.filter((x) => !x.hidden).length;
+                return (
+                  <div className="rounded-xl bg-white/[0.03] border border-white/10 px-3 py-2 flex items-center justify-between gap-2 text-[11px] text-zinc-300">
+                    <span>
+                      <strong className="text-white">{visibleCount}</strong> of{' '}
+                      <strong className="text-white">{colItems.length}</strong> tiles visible on site
+                    </span>
+                    <span className="text-[10px] text-zinc-400">
+                      Toggle On/Off per tile • Add multiple slides for carousel
+                    </span>
+                  </div>
+                );
+              })()}
 
               {uploadError && (
                 <div className="rounded-xl bg-red-950/80 border border-red-500/50 p-3 flex items-start justify-between gap-2 text-xs text-red-100">

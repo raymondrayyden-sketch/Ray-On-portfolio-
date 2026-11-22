@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   LightboxSectionType,
   LightboxSelection,
@@ -8,7 +8,12 @@ import type {
 } from '../types/portfolio';
 import { drawReelFrame } from '../utils/reelCanvas';
 import { buildProjectArtworkSVG } from '../utils/svgArtwork';
-import { deriveCloudinaryVideoPoster, normalizeCloudinaryVideoUrl } from '../services/portfolioCloud';
+import {
+  deriveCloudinaryVideoPoster,
+  isVideoUrl,
+  normalizeCloudinaryVideoUrl,
+  optimizeCloudinaryUrl,
+} from '../services/portfolioCloud';
 import { ResilientImage } from './ResilientImage';
 
 interface LightboxModalProps {
@@ -25,6 +30,9 @@ const SECTION_LABELS: Record<LightboxSectionType, string> = {
   photos: 'Photography & Retouching',
 };
 
+const AUTO_SWIPE_IMAGE_MS = 4000;
+const AUTO_SWIPE_VIDEO_MS = 8500;
+
 export function LightboxModal({
   selection,
   config,
@@ -32,42 +40,105 @@ export function LightboxModal({
   onNavigate,
 }: LightboxModalProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const dragStartRef = useRef<{ x: number; y: number; active: boolean }>({ x: 0, y: 0, active: false });
 
-  const list: Array<ProjectItem | VideoReelItem> = !selection
-    ? []
-    : selection.sectionType === 'identity'
-    ? config.identityProjects
-    : selection.sectionType === 'flyers'
-    ? config.flyerProjects
-    : selection.sectionType === 'videos'
-    ? config.videoReels
-    : config.photoProjects;
+  const list: Array<ProjectItem | VideoReelItem> = useMemo(() => {
+    if (!selection) return [];
+    const raw =
+      selection.sectionType === 'identity'
+        ? config.identityProjects
+        : selection.sectionType === 'flyers'
+          ? config.flyerProjects
+          : selection.sectionType === 'videos'
+            ? config.videoReels
+            : config.photoProjects;
+    return raw.filter((item) => !item.hidden);
+  }, [selection, config]);
 
   const activeIndex = selection ? list.findIndex((item) => item.id === selection.projectId) : -1;
   const activeItem = activeIndex >= 0 ? list[activeIndex] : null;
-  const isVideo = selection?.sectionType === 'videos';
-  const activeReel = isVideo && activeItem ? (activeItem as VideoReelItem) : null;
-  const activeProject = !isVideo && activeItem ? (activeItem as ProjectItem) : null;
+  const isVideoSection = selection?.sectionType === 'videos';
+  const activeReel = isVideoSection && activeItem ? (activeItem as VideoReelItem) : null;
+  const activeProject = !isVideoSection && activeItem ? (activeItem as ProjectItem) : null;
+
+  // Build full list of media slides for the active tile
+  const slides = useMemo(() => {
+    if (!activeItem) return [];
+    const out: string[] = [];
+    if (activeReel) {
+      const primary = activeReel.videoUrl
+        ? normalizeCloudinaryVideoUrl(activeReel.videoUrl)
+        : activeReel.gifUrl;
+      if (primary) out.push(primary);
+    } else if (activeProject?.image) {
+      out.push(activeProject.image);
+    }
+    if (Array.isArray(activeItem.gallery)) {
+      activeItem.gallery.forEach((u) => {
+        if (!u) return;
+        const normalized = isVideoUrl(u) ? normalizeCloudinaryVideoUrl(u) : u;
+        if (!out.includes(normalized)) out.push(normalized);
+      });
+    }
+    return out;
+  }, [activeItem, activeReel, activeProject]);
+
+  const hasCarousel = slides.length > 1;
+  const [activeSlide, setActiveSlide] = useState<number>(0);
+  const [isAutoSwiping, setIsAutoSwiping] = useState<boolean>(true);
+  const [isStageHovered, setIsStageHovered] = useState<boolean>(false);
+  const [dragOffset, setDragOffset] = useState<number>(0);
+
+  // Reset slide index & resume timed auto-swipe whenever a new tile is opened
+  useEffect(() => {
+    setActiveSlide(0);
+    setIsAutoSwiping(true);
+    setDragOffset(0);
+  }, [activeItem?.id]);
+
+  // Timed auto-swipe inside Lightbox when a tile has multiple media slides
+  useEffect(() => {
+    if (!selection || !hasCarousel || !isAutoSwiping || isStageHovered || dragOffset !== 0) return;
+    const currentUrl = slides[activeSlide];
+    const delayMs = isVideoUrl(currentUrl) ? AUTO_SWIPE_VIDEO_MS : AUTO_SWIPE_IMAGE_MS;
+    const timer = window.setTimeout(() => {
+      setActiveSlide((prev) => (prev + 1) % slides.length);
+    }, delayMs);
+    return () => window.clearTimeout(timer);
+  }, [selection, hasCarousel, isAutoSwiping, isStageHovered, dragOffset, activeSlide, slides]);
+
+  const goSlide = (delta: number) => {
+    if (slides.length <= 1) return;
+    setActiveSlide((prev) => (prev + delta + slides.length) % slides.length);
+  };
 
   useEffect(() => {
     if (!selection) return;
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
-      if (e.key === 'ArrowLeft' && list.length > 1) {
-        const prevIdx = (activeIndex - 1 + list.length) % list.length;
-        onNavigate({ sectionType: selection.sectionType, projectId: list[prevIdx].id });
+      if (e.key === 'ArrowLeft') {
+        if (slides.length > 1) {
+          setActiveSlide((prev) => (prev - 1 + slides.length) % slides.length);
+        } else if (list.length > 1) {
+          const prevIdx = (activeIndex - 1 + list.length) % list.length;
+          onNavigate({ sectionType: selection.sectionType, projectId: list[prevIdx].id });
+        }
       }
-      if (e.key === 'ArrowRight' && list.length > 1) {
-        const nextIdx = (activeIndex + 1) % list.length;
-        onNavigate({ sectionType: selection.sectionType, projectId: list[nextIdx].id });
+      if (e.key === 'ArrowRight') {
+        if (slides.length > 1) {
+          setActiveSlide((prev) => (prev + 1) % slides.length);
+        } else if (list.length > 1) {
+          const nextIdx = (activeIndex + 1) % list.length;
+          onNavigate({ sectionType: selection.sectionType, projectId: list[nextIdx].id });
+        }
       }
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [selection, activeIndex, list, onClose, onNavigate]);
+  }, [selection, activeIndex, list, slides.length, onClose, onNavigate]);
 
   useEffect(() => {
-    if (!activeReel || activeReel.videoUrl || activeReel.gifUrl) return;
+    if (!activeReel || activeReel.videoUrl || activeReel.gifUrl || slides.length > 0) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     let rafId = 0;
@@ -78,7 +149,7 @@ export function LightboxModal({
     };
     rafId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafId);
-  }, [activeReel]);
+  }, [activeReel, slides.length]);
 
   if (!selection || !activeItem) return null;
 
@@ -86,17 +157,47 @@ export function LightboxModal({
     `Hello ${config.profile.name}, I loved your "${activeItem.client} — ${activeItem.title}" project on your portfolio and would love to discuss something similar!`
   )}`;
 
-  const handlePrev = () => {
+  const handlePrevProject = () => {
     if (list.length <= 1) return;
     const prevIdx = (activeIndex - 1 + list.length) % list.length;
     onNavigate({ sectionType: selection.sectionType, projectId: list[prevIdx].id });
   };
 
-  const handleNext = () => {
+  const handleNextProject = () => {
     if (list.length <= 1) return;
     const nextIdx = (activeIndex + 1) % list.length;
     onNavigate({ sectionType: selection.sectionType, projectId: list[nextIdx].id });
   };
+
+  const handleStagePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!hasCarousel) return;
+    if ((e.target as HTMLElement).closest('button, video')) return;
+    dragStartRef.current = { x: e.clientX, y: e.clientY, active: true };
+  };
+
+  const handleStagePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!hasCarousel || !dragStartRef.current.active) return;
+    const dx = e.clientX - dragStartRef.current.x;
+    const dy = e.clientY - dragStartRef.current.y;
+    if (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) {
+      setDragOffset(Math.max(-140, Math.min(140, dx)));
+    }
+  };
+
+  const finishStageSwipe = (endX: number) => {
+    if (!dragStartRef.current.active) return;
+    const dx = endX - dragStartRef.current.x;
+    dragStartRef.current.active = false;
+    setDragOffset(0);
+    if (Math.abs(dx) >= 40) {
+      goSlide(dx < 0 ? 1 : -1);
+    }
+  };
+
+  const useLightBg = Boolean(
+    (activeProject?.image && activeProject?.lightBg) ||
+      (activeReel && !activeReel.videoUrl && activeReel.gifUrl && activeReel.lightBg)
+  );
 
   return (
     <div
@@ -115,22 +216,162 @@ export function LightboxModal({
           type="button"
           onClick={onClose}
           aria-label="Close Preview"
-          className="absolute top-4 right-4 z-20 w-10 h-10 rounded-full bg-obsidian/85 hover:bg-crimson text-white border border-white/15 flex items-center justify-center transition-colors"
+          className="absolute top-4 right-4 z-30 w-10 h-10 rounded-full bg-obsidian/85 hover:bg-crimson text-white border border-white/15 flex items-center justify-center transition-colors"
         >
           ✕
         </button>
 
         <div className="grid grid-cols-1 md:grid-cols-12">
-          <div className="md:col-span-6 bg-obsidian p-5 flex items-center justify-center">
+          {/* Left Media / Carousel Stage */}
+          <div className="md:col-span-6 bg-obsidian p-5 flex flex-col items-center justify-center gap-3">
             <div
-              className={`relative w-full aspect-square rounded-2xl overflow-hidden shadow-xl border border-white/10 ${
-                (activeProject?.image && activeProject?.lightBg) ||
-                (activeReel && !activeReel.videoUrl && activeReel.gifUrl && activeReel.lightBg)
+              onPointerDown={handleStagePointerDown}
+              onPointerMove={handleStagePointerMove}
+              onPointerUp={(e) => finishStageSwipe(e.clientX)}
+              onPointerCancel={() => {
+                dragStartRef.current.active = false;
+                setDragOffset(0);
+              }}
+              onPointerEnter={(e) => {
+                if (e.pointerType !== 'touch') setIsStageHovered(true);
+              }}
+              onPointerLeave={(e) => {
+                if (e.pointerType !== 'touch') setIsStageHovered(false);
+                if (dragStartRef.current.active) finishStageSwipe(e.clientX);
+              }}
+              className={`relative w-full aspect-square rounded-2xl overflow-hidden shadow-xl border border-white/10 touch-pan-y select-none ${
+                hasCarousel ? 'cursor-grab active:cursor-grabbing' : ''
+              } ${
+                useLightBg && !hasCarousel
                   ? 'bg-white p-5 flex items-center justify-center'
                   : 'bg-obsidian'
               }`}
             >
-              {activeReel ? (
+              {hasCarousel ? (
+                <>
+                  <div
+                    className={`flex w-full h-full ${
+                      dragOffset === 0 ? 'transition-transform duration-500 ease-out' : ''
+                    }`}
+                    style={{
+                      transform: `translate3d(calc(-${activeSlide * 100}% + ${dragOffset}px), 0, 0)`,
+                    }}
+                  >
+                    {slides.map((src, idx) => {
+                      const slideIsVideo = isVideoUrl(src);
+                      const isActive = idx === activeSlide;
+                      const poster =
+                        idx === 0 && activeReel?.posterUrl
+                          ? activeReel.posterUrl
+                          : slideIsVideo
+                            ? deriveCloudinaryVideoPoster(src)
+                            : undefined;
+                      return (
+                        <div
+                          key={`${activeItem.id}-lb-slide-${idx}`}
+                          className={`w-full h-full shrink-0 flex items-center justify-center ${
+                            useLightBg && !slideIsVideo ? 'bg-white p-5' : 'bg-obsidian'
+                          }`}
+                        >
+                          {slideIsVideo ? (
+                            <video
+                              key={`${src}-${isActive ? 'active' : 'idle'}`}
+                              src={normalizeCloudinaryVideoUrl(src)}
+                              poster={poster}
+                              controls
+                              autoPlay={isActive}
+                              loop
+                              playsInline
+                              preload="metadata"
+                              className="w-full h-full object-cover"
+                            />
+                          ) : (
+                            <img
+                              src={src}
+                              alt={`${activeItem.client} — ${activeItem.title} (Slide ${idx + 1})`}
+                              referrerPolicy="no-referrer"
+                              draggable={false}
+                              className={
+                                useLightBg
+                                  ? 'w-full h-full object-contain'
+                                  : 'w-full h-full object-cover object-top'
+                              }
+                            />
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Top Carousel Status & Auto-Swipe Toggle */}
+                  <div className="absolute top-3 inset-x-3 z-20 flex items-center justify-between gap-2 pointer-events-none">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setIsAutoSwiping((v) => !v);
+                      }}
+                      className="pointer-events-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-obsidian/80 hover:bg-crimson backdrop-blur-md border border-white/20 text-[10px] font-montserrat font-bold text-white transition-colors"
+                      title={isAutoSwiping ? 'Pause auto-swipe' : 'Resume auto-swipe'}
+                    >
+                      <span
+                        className={`w-1.5 h-1.5 rounded-full ${
+                          isAutoSwiping && !isStageHovered ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-400'
+                        }`}
+                      />
+                      <span>{isAutoSwiping ? 'Auto-Swipe ON' : 'Paused'}</span>
+                    </button>
+
+                    <span className="px-2.5 py-1 rounded-full bg-obsidian/80 backdrop-blur-md border border-white/20 text-[10px] font-mono font-bold text-white">
+                      {activeSlide + 1} / {slides.length}
+                    </span>
+                  </div>
+
+                  {/* Manual Carousel Prev / Next Arrows */}
+                  <button
+                    type="button"
+                    aria-label="Previous media slide"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      goSlide(-1);
+                    }}
+                    className="absolute left-2.5 top-1/2 -translate-y-1/2 z-20 w-9 h-9 rounded-full bg-obsidian/80 hover:bg-crimson text-white border border-white/20 flex items-center justify-center text-lg font-bold transition-colors shadow-lg"
+                  >
+                    ‹
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Next media slide"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      goSlide(1);
+                    }}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 z-20 w-9 h-9 rounded-full bg-obsidian/80 hover:bg-crimson text-white border border-white/20 flex items-center justify-center text-lg font-bold transition-colors shadow-lg"
+                  >
+                    ›
+                  </button>
+
+                  {/* Bottom Swipe Hint & Dots */}
+                  <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-obsidian/80 backdrop-blur-md border border-white/15">
+                    {slides.map((_, idx) => (
+                      <button
+                        key={`${activeItem.id}-lb-dot-${idx}`}
+                        type="button"
+                        aria-label={`View slide ${idx + 1}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setActiveSlide(idx);
+                        }}
+                        className={`h-2 rounded-full transition-all ${
+                          idx === activeSlide
+                            ? 'w-5 bg-crimson'
+                            : 'w-2 bg-white/40 hover:bg-white/80'
+                        }`}
+                      />
+                    ))}
+                  </div>
+                </>
+              ) : activeReel ? (
                 activeReel.videoUrl ? (
                   <video
                     key={normalizeCloudinaryVideoUrl(activeReel.videoUrl)}
@@ -169,8 +410,57 @@ export function LightboxModal({
                 />
               ) : null}
             </div>
+
+            {/* Thumbnail Strip for Multi-Media Carousels */}
+            {hasCarousel && (
+              <div className="w-full space-y-1.5">
+                <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                  {slides.map((src, idx) => {
+                    const slideIsVideo = isVideoUrl(src);
+                    const thumbSrc = slideIsVideo
+                      ? deriveCloudinaryVideoPoster(src) || ''
+                      : optimizeCloudinaryUrl(src, 200) || src;
+                    return (
+                      <button
+                        key={`${activeItem.id}-thumb-${idx}`}
+                        type="button"
+                        onClick={() => setActiveSlide(idx)}
+                        className={`relative w-12 h-12 rounded-xl overflow-hidden border-2 shrink-0 transition-all ${
+                          idx === activeSlide
+                            ? 'border-crimson scale-105 shadow-md shadow-crimson/40'
+                            : 'border-white/15 opacity-60 hover:opacity-100'
+                        }`}
+                        aria-label={`Select slide ${idx + 1}`}
+                      >
+                        {thumbSrc ? (
+                          <img
+                            src={thumbSrc}
+                            alt=""
+                            className="w-full h-full object-cover"
+                            referrerPolicy="no-referrer"
+                          />
+                        ) : (
+                          <div className="w-full h-full bg-zinc-900 flex items-center justify-center text-[10px] text-zinc-400">
+                            {idx + 1}
+                          </div>
+                        )}
+                        {slideIsVideo && (
+                          <span className="absolute inset-0 bg-black/35 flex items-center justify-center text-[10px] text-white">
+                            ▶
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-[10.5px] text-zinc-400 text-center">
+                  Swipe left/right or tap thumbnails to browse slides
+                </p>
+              </div>
+            )}
           </div>
 
+          {/* Right Project Details */}
           <div className="md:col-span-6 p-6 sm:p-7 flex flex-col justify-between gap-5">
             <div>
               <div className="flex flex-wrap items-center gap-2 pr-8">
@@ -223,7 +513,7 @@ export function LightboxModal({
             <div className="pt-4 border-t border-white/10 flex items-center justify-between">
               <button
                 type="button"
-                onClick={handlePrev}
+                onClick={handlePrevProject}
                 className="px-4 py-2 rounded-full bg-white/10 hover:bg-crimson text-xs font-semibold text-white transition-colors"
               >
                 ← Previous
@@ -233,7 +523,7 @@ export function LightboxModal({
               </span>
               <button
                 type="button"
-                onClick={handleNext}
+                onClick={handleNextProject}
                 className="px-4 py-2 rounded-full bg-white/10 hover:bg-crimson text-xs font-semibold text-white transition-colors"
               >
                 Next →

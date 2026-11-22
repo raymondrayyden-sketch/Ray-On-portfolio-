@@ -91,7 +91,7 @@ export function AffiliationsMarquee({
         )}
 
         {/* Signature Ray-On Floating Hover / Tap Tooltip */}
-        <span className="org-tooltip pointer-events-none absolute -top-8 left-1/2 whitespace-nowrap px-2.5 py-1 rounded-full bg-obsidian/95 border border-crimson/65 text-[10px] font-montserrat font-bold tracking-wider uppercase text-white shadow-[0_6px_18px_rgba(230,10,21,0.38)] z-20">
+        <span className="org-tooltip pointer-events-none absolute -top-9 left-1/2 whitespace-nowrap px-2.5 py-1 rounded-full bg-obsidian/95 border border-crimson/70 text-[10px] font-montserrat font-bold tracking-wider uppercase text-white shadow-[0_6px_18px_rgba(230,10,21,0.42)] z-30">
           {item.name}
         </span>
       </div>
@@ -151,11 +151,11 @@ export function AffiliationsMarquee({
       id="affiliations"
       aria-label="Affiliated Organizations"
       onClick={() => setActiveTileKey(null)}
-      className="relative bg-[#070304] border-t border-crimson/40 overflow-hidden py-7 sm:py-9"
+      className="relative bg-[#070304] border-t border-crimson/40 overflow-x-clip py-7 sm:py-9"
     >
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_60%_80%_at_50%_50%,rgba(230,10,21,0.12),transparent_70%)]" />
 
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10 mb-3 flex items-center justify-center text-center gap-3">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10 mb-1 flex items-center justify-center text-center gap-3">
         <div className="flex items-center justify-center gap-2">
           <span className="w-2 h-2 rounded-full bg-crimson shadow-[0_0_10px_#E60A15]" />
           <EditableText
@@ -171,7 +171,7 @@ export function AffiliationsMarquee({
 
       {/* Seamless Right-to-Left Rolling Logo Strip with Signature Hover Morph & Pause */}
       <div
-        className={`marquee-container marquee-mask relative z-10 w-full overflow-hidden pt-9 pb-4 ${
+        className={`marquee-container marquee-mask relative z-20 w-full overflow-x-clip pt-14 pb-6 ${
           activeTileKey ? 'is-paused' : ''
         }`}
       >

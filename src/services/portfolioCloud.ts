@@ -10,6 +10,10 @@ import {
 } from 'firebase/auth';
 import type { PortfolioConfig } from '../types/portfolio';
 import { DEFAULT_PORTFOLIO_CONFIG } from '../data/defaultPortfolio';
+import {
+  applyAuditedProjectCaption,
+  applyAuditedVideoCaption,
+} from '../data/auditedMediaCaptions';
 import { deepClone } from '../utils/svgArtwork';
 
 export const CLOUDINARY_CONFIG = {
@@ -198,31 +202,59 @@ export function mergePortfolioConfig(saved: Partial<PortfolioConfig> | null | un
       }))
     : base.affiliations;
 
+  const sanitizeGallery = (gallery: string[] | undefined): string[] => {
+    if (!Array.isArray(gallery)) return [];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    gallery.forEach((raw) => {
+      const clean = sanitizeUrl(raw, null);
+      if (!clean) return;
+      const normalized = isVideoUrl(clean) ? normalizeCloudinaryVideoUrl(clean) : clean;
+      if (!seen.has(normalized)) {
+        seen.add(normalized);
+        out.push(normalized);
+      }
+    });
+    return out;
+  };
+
   const sanitizeProjectList = (
     list: PortfolioConfig['identityProjects'] | undefined,
     fallbackList: PortfolioConfig['identityProjects']
   ) =>
     Array.isArray(list)
-      ? list.map((item) => ({
-          ...item,
-          image: sanitizeUrl(item.image, null),
-          fallbackImage: item.fallbackImage !== undefined ? sanitizeUrl(item.fallbackImage, null) : undefined,
-        }))
+      ? list.map((item) => {
+          const cleanImage = sanitizeUrl(item.image, null);
+          const cleanGallery = sanitizeGallery(item.gallery).filter((u) => u !== cleanImage);
+          return applyAuditedProjectCaption({
+            ...item,
+            image: cleanImage,
+            fallbackImage:
+              item.fallbackImage !== undefined ? sanitizeUrl(item.fallbackImage, null) : undefined,
+            hidden: Boolean(item.hidden),
+            gallery: cleanGallery,
+          });
+        })
       : fallbackList;
 
   const mergedVideoReels = Array.isArray(saved.videoReels)
     ? saved.videoReels.map((v) => {
         const cleanVideoUrl = sanitizeUrl(v.videoUrl, null);
         const normalizedVideoUrl = cleanVideoUrl ? normalizeCloudinaryVideoUrl(cleanVideoUrl) : null;
+        const cleanGifUrl = normalizedVideoUrl ? null : sanitizeUrl(v.gifUrl, null);
         const cleanPosterUrl = sanitizeUrl(v.posterUrl, null);
-        return {
+        const primaryMedia = normalizedVideoUrl || cleanGifUrl;
+        const cleanGallery = sanitizeGallery(v.gallery).filter((u) => u !== primaryMedia);
+        return applyAuditedVideoCaption({
           ...v,
           videoUrl: normalizedVideoUrl,
-          gifUrl: normalizedVideoUrl ? null : sanitizeUrl(v.gifUrl, null),
+          gifUrl: cleanGifUrl,
           posterUrl:
             cleanPosterUrl ||
             (normalizedVideoUrl ? deriveCloudinaryVideoPoster(normalizedVideoUrl) || null : null),
-        };
+          hidden: Boolean(v.hidden),
+          gallery: cleanGallery,
+        });
       })
     : base.videoReels;
 
@@ -326,6 +358,12 @@ function sanitizeConfigForCloud(config: PortfolioConfig): {
       if (item.fallbackImage !== undefined) {
         item.fallbackImage = stripTransient(item.fallbackImage, null);
       }
+      if (Array.isArray(item.gallery)) {
+        item.gallery = item.gallery
+          .map((u) => stripTransient(u, null))
+          .filter((u): u is string => Boolean(u));
+      }
+      item.hidden = Boolean(item.hidden);
     });
   });
 
@@ -333,6 +371,12 @@ function sanitizeConfigForCloud(config: PortfolioConfig): {
     v.posterUrl = stripTransient(v.posterUrl, null);
     v.gifUrl = stripTransient(v.gifUrl, null);
     v.videoUrl = stripTransient(v.videoUrl, null);
+    if (Array.isArray(v.gallery)) {
+      v.gallery = v.gallery
+        .map((u) => stripTransient(u, null))
+        .filter((u): u is string => Boolean(u));
+    }
+    v.hidden = Boolean(v.hidden);
   });
 
   if (cleaned.cv) {

@@ -120,6 +120,8 @@ export interface ProjectItem {
   fallbackImage?: string | null;
   artKey: string;
   lightBg?: boolean;
+  hidden?: boolean;
+  gallery?: string[];
 }
 
 export type ReelMotionType =
@@ -145,6 +147,8 @@ export interface VideoReelItem {
   videoUrl: string | null;
   motionType: ReelMotionType;
   lightBg?: boolean;
+  hidden?: boolean;
+  gallery?: string[];
 }
 
 export interface TestimonialItem {
